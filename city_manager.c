@@ -6,171 +6,306 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <time.h>
+#include <dirent.h>
+
 #define MAX_STR 100
 
 typedef struct {
     int id;
     char inspector[MAX_STR];
     double lat, lon;
-    char categorie[MAX_STR];
-    int gravitate;
-    time_t data;
-    char descriere[MAX_STR];
-} Raport;
+    char category[MAX_STR];
+    int severity;
+    time_t timestamp;
+    char description[MAX_STR];
+} Report;
 
-// --- PERMISIUNI (Bit-to-Symbol manual) ---
+// --- AI-ASSISTED FUNCTIONS FOR FILTERING ---
 
-void perm_to_str(mode_t m, char *s) {
-    s[0] = (m & S_IRUSR) ? 'r' : '-'; s[1] = (m & S_IWUSR) ? 'w' : '-'; s[2] = (m & S_IXUSR) ? 'x' : '-';
-    s[3] = (m & S_IRGRP) ? 'r' : '-'; s[4] = (m & S_IWGRP) ? 'w' : '-'; s[5] = (m & S_IXGRP) ? 'x' : '-';
-    s[6] = (m & S_IROTH) ? 'r' : '-'; s[7] = (m & S_IWOTH) ? 'w' : '-'; s[8] = (m & S_IXOTH) ? 'x' : '-';
-    s[9] = '\0';
-}
-
-// Verifică rolul față de permisiunile reale ale fișierului
-int are_permisiune(const char *cale, const char *rol, mode_t bit_necesar) {
-    struct stat st;
-    if (stat(cale, &st) != 0) return 1; // Permitem dacă fișierul nu există încă
-
-    if (strcmp(rol, "manager") == 0) return (st.st_mode & (bit_necesar << 6)); // Verifică biții de Owner
-    if (strcmp(rol, "inspector") == 0) return (st.st_mode & (bit_necesar << 3)); // Verifică biții de Group
+/* Splits a string of type "field:operator:value" */
+int parse_condition(const char *input, char *field, char *op, char *value) {
+    // Using sscanf with %[ ^:] to read until the ':' character is encountered
+    if (sscanf(input, "%[^:]:%[^:]:%s", field, op, value) == 3) {
+        return 1;
+    }
     return 0;
 }
 
-// --- LOGGING ---
+/* Checks if a report 'r' satisfies a specific condition */
+int match_condition(Report *r, const char *field, const char *op, const char *value) {
+    if (strcmp(field, "severity") == 0) {
+        int val_comp = atoi(value);
+        if (strcmp(op, "==") == 0) return r->severity == val_comp;
+        if (strcmp(op, "!=") == 0) return r->severity != val_comp;
+        if (strcmp(op, "<") == 0)  return r->severity < val_comp;
+        if (strcmp(op, "<=") == 0) return r->severity <= val_comp;
+        if (strcmp(op, ">") == 0)  return r->severity > val_comp;
+        if (strcmp(op, ">=") == 0) return r->severity >= val_comp;
+    }
+    else if (strcmp(field, "category") == 0) {
+        if (strcmp(op, "==") == 0) return strcmp(r->category, value) == 0;
+        if (strcmp(op, "!=") == 0) return strcmp(r->category, value) != 0;
+    }
+    else if (strcmp(field, "inspector") == 0) {
+        if (strcmp(op, "==") == 0) return strcmp(r->inspector, value) == 0;
+        if (strcmp(op, "!=") == 0) return strcmp(r->inspector, value) != 0;
+    }
+    else if (strcmp(field, "timestamp") == 0) {
+        time_t val_comp = (time_t)atol(value);
+        if (strcmp(op, "==") == 0) return r->timestamp == val_comp;
+        if (strcmp(op, "!=") == 0) return r->timestamp != val_comp;
+        if (strcmp(op, "<") == 0)  return r->timestamp < val_comp;
+        if (strcmp(op, ">") == 0)  return r->timestamp > val_comp;
+    }
+    return 0;
+}
 
-void log_action(const char *dist, const char *rol, const char *user, const char *msg) {
-    char cale[256]; sprintf(cale, "%s/logged_district", dist);
+// PERMISSIONS (Bit-to-Symbol manual conversion)
 
-    // Verifică permisiunea de scriere (Manager only conform schemei pentru scriere)
-    if (access(cale, F_OK) == 0 && strcmp(rol, "manager") != 0) return;
+void perm_to_str(mode_t m, char *s) {
+    if (m & S_IRUSR) s[0] = 'r'; else s[0] = '-';
+    if (m & S_IWUSR) s[1] = 'w'; else s[1] = '-';
+    if (m & S_IXUSR) s[2] = 'x'; else s[2] = '-';
+    if (m & S_IRGRP) s[3] = 'r'; else s[3] = '-';
+    if (m & S_IWGRP) s[4] = 'w'; else s[4] = '-';
+    if (m & S_IXGRP) s[5] = 'x'; else s[5] = '-';
+    if (m & S_IROTH) s[6] = 'r'; else s[6] = '-';
+    if (m & S_IWOTH) s[7] = 'w'; else s[7] = '-';
+    if (m & S_IXOTH) s[8] = 'x'; else s[8] = '-';
+    s[9] = '\0';
+}
 
-    int fd = open(cale, O_WRONLY | O_CREAT | O_APPEND, 0644);
+void log_action(const char *dist, const char *role, const char *user, const char *msg) {
+    char path[256]; sprintf(path, "%s/logged_district", dist);
+    if (access(path, F_OK) == 0 && strcmp(role, "manager") != 0) return;
+
+    int fd = open(path, O_WRONLY | O_CREAT | O_APPEND, 0644);
     if (fd >= 0) {
-        chmod(cale, 0644);
-        time_t acum = time(NULL);
-        char *t = ctime(&acum); t[strlen(t)-1] = '\0';
-        dprintf(fd, "[%s] %s (%s): %s\n", t, user, rol, msg);
+        chmod(path, 0644);
+        time_t now = time(NULL);
+        char *t = ctime(&now); t[strlen(t)-1] = '\0';
+        dprintf(fd, "[%s] %s (%s): %s\n", t, user, role, msg);
         close(fd);
     }
 }
 
-// --- OPERAȚII ---
+// SYMLINK MANAGEMENT
 
-void add_report(const char *dist, const char *user, const char *rol) {
-    mkdir(dist, 0750); chmod(dist, 0750);
-    char cale[256]; sprintf(cale, "%s/reports.dat", dist);
+void update_symlink(const char *dist) {
+    char link_name[256];
+    char target_path[256];
+    sprintf(link_name, "active_reports-%s", dist);
+    sprintf(target_path, "%s/reports.dat", dist);
 
-    Raport r;
-    r.id = rand() % 10000;
-    strncpy(r.inspector, user, MAX_STR);
-    r.data = time(NULL);
+    // Clean up: remove existing link if it exists to update it
+    unlink(link_name);
 
-    printf("Categorie: "); scanf("%s", r.categorie);
-    printf("Gravitate (1-3): "); scanf("%d", &r.gravitate);
-    printf("GPS (lat lon): "); scanf("%lf %lf", &r.lat, &r.lon);
-    printf("Descriere: "); scanf(" %[^\n]", r.descriere);
-
-    int fd = open(cale, O_WRONLY | O_CREAT | O_APPEND, 0664);
-    if (fd < 0) { perror("Acces refuzat"); return; }
-    chmod(cale, 0664);
-    write(fd, &r, sizeof(Raport));
-    close(fd);
-    log_action(dist, rol, user, "ADD_REPORT");
+    // Create new symlink: target -> link_name
+    if (symlink(target_path, link_name) == 0) {
+        printf("Symlink updated: %s -> %s\n", link_name, target_path);
+    }
 }
 
-void list_reports(const char *dist, const char *rol, const char *user) {
-    char cale[256], p_str[11]; sprintf(cale, "%s/reports.dat", dist);
+// OPERATIONS
+
+void add_report(const char *dist, const char *user, const char *role) {
+    mkdir(dist, 0750); chmod(dist, 0750);
+    char path[256]; sprintf(path, "%s/reports.dat", dist);
+
+    Report r;
+    r.id = rand() % 10000;
+    strncpy(r.inspector, user, MAX_STR);
+    r.timestamp = time(NULL);
+
+    printf("Category: "); scanf("%s", r.category);
+    printf("Severity (1-3): "); scanf("%d", &r.severity);
+    printf("GPS (lat lon): "); scanf("%lf %lf", &r.lat, &r.lon);
+    printf("Description: "); scanf(" %[^\n]", r.description);
+
+    int fd = open(path, O_WRONLY | O_CREAT | O_APPEND, 0664);
+    if (fd < 0) { perror("Access denied"); return; }
+    chmod(path, 0664);
+    write(fd, &r, sizeof(Report));
+    close(fd);
+
+    update_symlink(dist); // Requirement: Create/Update symlink
+    log_action(dist, role, user, "ADD_REPORT");
+}
+
+void list_reports(const char *dist, const char *role, const char *user) {
+    char path[256], p_str[11]; sprintf(path, "%s/reports.dat", dist);
     struct stat st;
-    if (stat(cale, &st) != 0) return;
+    if (stat(path, &st) != 0) { printf("No reports found.\n"); return; }
 
     perm_to_str(st.st_mode, p_str);
-    printf("Fișier: %s | Permisiuni: %s | Mărime: %ld | Modificat: %s", cale, p_str, st.st_size, ctime(&st.st_mtime));
+    printf("File: %s | Permissions: %s | Size: %ld | Modified: %s", path, p_str, (long)st.st_size, ctime(&st.st_mtime));
 
-    int fd = open(cale, O_RDONLY);
-    Raport r;
-    while(read(fd, &r, sizeof(Raport)) > 0)
-        printf("[%d] %s | Sev: %d | De: %s\n", r.id, r.categorie, r.gravitate, r.inspector);
+    int fd = open(path, O_RDONLY);
+    Report r;
+    while(read(fd, &r, sizeof(Report)) > 0)
+        printf("[%d] %s | Sev: %d | By: %s\n", r.id, r.category, r.severity, r.inspector);
     close(fd);
-    log_action(dist, rol, user, "LIST");
+    log_action(dist, role, user, "LIST");
 }
 
 void view_report(const char *dist, int id) {
-    char cale[256]; sprintf(cale, "%s/reports.dat", dist);
-    int fd = open(cale, O_RDONLY);
-    Raport r;
-    while(read(fd, &r, sizeof(Raport)) > 0) {
+    char path[256]; sprintf(path, "%s/reports.dat", dist);
+    int fd = open(path, O_RDONLY);
+    Report r;
+    while(read(fd, &r, sizeof(Report)) > 0) {
         if(r.id == id) {
-            printf("\nID: %d\nCat: %s\nSev: %d\nGPS: %f, %f\nDesc: %s\n", r.id, r.categorie, r.gravitate, r.lat, r.lon, r.descriere);
+            printf("\nID: %d\nCat: %s\nSev: %d\nGPS: %f, %f\nDesc: %s\n", r.id, r.category, r.severity, r.lat, r.lon, r.description);
             close(fd); return;
         }
     }
-    printf("Raport negăsit.\n"); close(fd);
+    printf("Report not found.\n"); close(fd);
 }
 
-void remove_report(const char *dist, int id, const char *rol, const char *user) {
-    if (strcmp(rol, "manager") != 0) { printf("Doar managerul poate șterge!\n"); return; }
-    char cale[256]; sprintf(cale, "%s/reports.dat", dist);
+void remove_report(const char *dist, int id, const char *role, const char *user) {
+    if (strcmp(role, "manager") != 0) { printf("Only managers can delete reports!\n"); return; }
+    char path[256]; sprintf(path, "%s/reports.dat", dist);
 
-    int fd = open(cale, O_RDWR);
+    int fd = open(path, O_RDWR);
     if (fd < 0) return;
 
-    Raport r; off_t scriere = 0; int gasit = 0;
-    while(read(fd, &r, sizeof(Raport)) > 0) {
-        if (r.id == id) { gasit = 1; continue; }
-        if (gasit) {
+    Report r; off_t write_pos = 0; int found = 0;
+    while(read(fd, &r, sizeof(Report)) > 0) {
+        if (r.id == id) { found = 1; continue; }
+        if (found) {
             off_t temp = lseek(fd, 0, SEEK_CUR);
-            lseek(fd, scriere, SEEK_SET);
-            write(fd, &r, sizeof(Raport));
+            lseek(fd, write_pos, SEEK_SET);
+            write(fd, &r, sizeof(Report));
             lseek(fd, temp, SEEK_SET);
         }
-        scriere += sizeof(Raport);
+        write_pos += sizeof(Report);
     }
-    if (gasit) ftruncate(fd, scriere);
+    if (found) ftruncate(fd, write_pos);
     close(fd);
-    log_action(dist, rol, user, "REMOVE_REPORT");
+    log_action(dist, role, user, "REMOVE_REPORT");
 }
 
-void update_threshold(const char *dist, int val, const char *rol, const char *user) {
-    if (strcmp(rol, "manager") != 0) return;
-    char cale[256]; sprintf(cale, "%s/district.cfg", dist);
+void update_threshold(const char *dist, int val, const char *role, const char *user) {
+    if (strcmp(role, "manager") != 0) return;
+    char path[256]; sprintf(path, "%s/district.cfg", dist);
 
     struct stat st;
-    if (stat(cale, &st) == 0 && (st.st_mode & 0777) != 0640) {
-        printf("Eroare: Permisiunile district.cfg au fost alterate!\n");
+    if (stat(path, &st) == 0 && (st.st_mode & 0777) != 0640) {
+        printf("Error: district.cfg permissions have been altered!\n");
         return;
     }
 
-    int fd = open(cale, O_WRONLY | O_CREAT | O_TRUNC, 0640);
+    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0640);
     if (fd >= 0) {
         dprintf(fd, "threshold=%d\n", val);
-        chmod(cale, 0640);
+        chmod(path, 0640);
         close(fd);
     }
-    log_action(dist, rol, user, "UPDATE_THRESHOLD");
+    log_action(dist, role, user, "UPDATE_THRESHOLD");
 }
 
-// --- MAIN ---
+void filter_reports(const char *dist, int argc, char *argv[], int start_idx) {
+    char path[256]; sprintf(path, "%s/reports.dat", dist);
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) { printf("Data file not found.\n"); return; }
+
+    Report r;
+    int count = 0;
+    while (read(fd, &r, sizeof(Report)) > 0) {
+        int matches_all = 1;
+        for (int i = start_idx; i < argc; i++) {
+            char field[50], op[10], value[MAX_STR];
+            if (parse_condition(argv[i], field, op, value)) {
+                if (!match_condition(&r, field, op, value)) {
+                    matches_all = 0;
+                    break;
+                }
+            }
+        }
+        if (matches_all) {
+            printf("[%d] %s | Sev: %d | Insp: %s | Desc: %s\n",
+                   r.id, r.category, r.severity, r.inspector, r.description);
+            count++;
+        }
+    }
+    if (count == 0) printf("No reports matching the criteria.\n");
+    close(fd);
+}
+
+void scan_links() {
+    struct dirent *de;
+    DIR *dr = opendir(".");
+    if (dr == NULL) return;
+
+    printf("\n--- Scanning for Symlinks (using lstat) ---\n");
+    while ((de = readdir(dr)) != NULL) {
+        struct stat linfo, sinfo;
+
+        // Use lstat to identify the link itself
+        if (lstat(de->d_name, &linfo) == 0) {
+            if (S_ISLNK(linfo.st_mode)) {
+                printf("Found Link: %s", de->d_name);
+
+                // Use stat to check if the destination exists (detect dangling)
+                if (stat(de->d_name, &sinfo) != 0) {
+                    printf(" -> WARNING: DANGLING LINK!\n");
+                } else {
+                    printf(" -> OK (Target size: %ld bytes)\n", (long)sinfo.st_size);
+                }
+            }
+        }
+    }
+    closedir(dr);
+}
+
+// MAIN
 
 int main(int argc, char *argv[]) {
-    char *rol = "inspector", *user = "anonim", *dist = NULL, *cmd = NULL;
+    char *role = "inspector", *user = "anonymous", *dist = NULL, *cmd = NULL;
     int val = -1;
+    int cmd_pos = -1;
 
     for (int i = 1; i < argc; i++) {
-        if (!strcmp(argv[i], "--role")) rol = argv[++i];
-        else if (!strcmp(argv[i], "--user")) user = argv[++i];
-        else if (!dist) dist = argv[i];
-        else if (!cmd) cmd = argv[i];
-        else val = atoi(argv[i]);
+        if (!strcmp(argv[i], "--role") && i + 1 < argc) {
+            role = argv[++i];
+        } else if (!strcmp(argv[i], "--user") && i + 1 < argc) {
+            user = argv[++i];
+        } else if (!dist && argv[i][0] != '-') {
+            dist = argv[i];
+        } else if (!cmd && argv[i][0] != '-') {
+            cmd = argv[i];
+            cmd_pos = i;
+        } else if (val == -1 && argv[i][0] != '-') {
+            val = atoi(argv[i]);
+        }
     }
 
-    if (!dist || !cmd) return 0;
+    if (dist && !strcmp(dist, "scan")) {
+        scan_links();
+        return 0;
+    }
 
-    if (!strcmp(cmd, "add")) add_report(dist, user, rol);
-    else if (!strcmp(cmd, "list")) list_reports(dist, rol, user);
-    else if (!strcmp(cmd, "view")) view_report(dist, val);
-    else if (!strcmp(cmd, "remove_report")) remove_report(dist, val, rol, user);
-    else if (!strcmp(cmd, "update_threshold")) update_threshold(dist, val, rol, user);
+    if (!dist || !cmd) {
+        printf("Usage:\n");
+        printf("  %s <district> <command> [args]\n", argv[0]);
+        printf("  %s scan (to check all symlinks)\n", argv[0]);
+        return 0;
+    }
+
+    if (!strcmp(cmd, "add")) {
+        add_report(dist, user, role);
+    } else if (!strcmp(cmd, "list")) {
+        list_reports(dist, role, user);
+    } else if (!strcmp(cmd, "view")) {
+        view_report(dist, val);
+    } else if (!strcmp(cmd, "remove_report")) {
+        remove_report(dist, val, role, user);
+    } else if (!strcmp(cmd, "update_threshold")) {
+        update_threshold(dist, val, role, user);
+    } else if (!strcmp(cmd, "filter")) {
+        filter_reports(dist, argc, argv, cmd_pos + 1);
+    } else if (!strcmp(cmd, "scan")) {
+        scan_links();
+    }
 
     return 0;
 }
