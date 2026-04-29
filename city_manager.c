@@ -119,7 +119,7 @@ void add_report(const char *dist, const char *user, const char *role) {
     strncpy(r.inspector, user, MAX_STR);
     r.timestamp = time(NULL);
 
-    printf("Category: "); scanf("%s", r.category);
+    printf("Category: "); scanf(" %[^\n]", r.category);
     printf("Severity (1-3): "); scanf("%d", &r.severity);
     printf("GPS (lat lon): "); scanf("%lf %lf", &r.lat, &r.lon);
     printf("Description: "); scanf(" %[^\n]", r.description);
