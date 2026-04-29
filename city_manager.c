@@ -5,8 +5,10 @@
 #include <unistd.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <sys/wait.h>
 #include <time.h>
 #include <dirent.h>
+#include <threads.h>
 
 #define MAX_STR 100
 
@@ -184,6 +186,37 @@ void remove_report(const char *dist, int id, const char *role, const char *user)
     log_action(dist, role, user, "REMOVE_REPORT");
 }
 
+void remove_district(const char *dist,const char* role,const char* user) {
+    if (strcmp(role,"manager")!=0) {
+        printf("Only managers can delete district!\n");
+        return;
+    }
+    char symlink[256];
+    snprintf(symlink, sizeof(symlink), "active_reports-%s", dist);
+    if (unlink(symlink)==-1) {
+        printf("Unlink failed.\n");
+        return;
+    }
+    pid_t pid = fork();
+    if (pid < 0) {
+        printf("Fork failed.\n");
+        return;
+    }
+    else if (pid == 0) { //child process
+        execlp("rm","rm","-rf",dist,NULL);
+        printf("Execlp failed.\n");
+        return;
+    }else {
+        printf("Parent process created.\n");
+        waitpid(pid, NULL, 0);
+        printf("District '%s' was deleted.\n",dist);
+    }
+
+
+
+
+}
+
 void update_threshold(const char *dist, int val, const char *role, const char *user) {
     if (strcmp(role, "manager") != 0) return;
     char path[256]; sprintf(path, "%s/district.cfg", dist);
@@ -305,6 +338,8 @@ int main(int argc, char *argv[]) {
         filter_reports(dist, argc, argv, cmd_pos + 1);
     } else if (!strcmp(cmd, "scan")) {
         scan_links();
+    } else if (!strcmp(cmd, "remove_district")) {
+        remove_district(dist, role, user);
     }
 
     return 0;
