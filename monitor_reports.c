@@ -22,7 +22,20 @@ void handle_signal(int sig) {
 }
 
 int main() {
-
+    FILE* f = fopen(PID_FILE, "r");
+    if (f != NULL) {
+        int existing_pid;
+        if (fscanf(f, "%d", &existing_pid) == 1) {
+            if (kill(existing_pid, 0) == 0) {
+                char err_msg[128];
+                int len = sprintf(err_msg,"PID file already running with PID:%d.\n",existing_pid);
+                write(STDOUT_FILENO, err_msg, len);
+                fclose(f);
+                return 1;
+            }
+        }
+    }
+    fclose(f);
     int fd = open(PID_FILE, O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (fd < 0) {
         perror("Error creating PID file");
