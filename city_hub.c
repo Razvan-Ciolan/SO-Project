@@ -48,7 +48,6 @@ void start_monitor() {
             } else {
                 printf("\n[MONITOR LOG] %s", buffer);
             }
-            fflush(stdout);
         }
         close(pfd[0]);
         waitpid(pid, NULL, 0);
@@ -119,7 +118,6 @@ int main() {
     printf("Welcome to City Hub Shell!\n");
     while (1) {
         printf("hub_shell> ");
-        fflush(stdout);
 
         if (scanf("%s", command) <= 0) break;
 
