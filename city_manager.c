@@ -9,8 +9,10 @@
 #include <time.h>
 #include <dirent.h>
 #include <threads.h>
+#include <signal.h>
 
 #define MAX_STR 100
+#define PID_FILE ".monitor_pid"
 
 typedef struct {
     int id;
@@ -110,6 +112,28 @@ void update_symlink(const char *dist) {
 
 // OPERATIONS
 
+void notify_monitor(const char *dist, const char *role, const char *user) {
+    int fd = open(PID_FILE, O_RDONLY);
+    if (fd < 0) {
+        log_action(dist, role, user, "ADD_REPORT - Monitor NOT notified (PID file missing)");
+        return;
+    }
+
+    char pid_str[16];
+    int bytes = read(fd, pid_str, sizeof(pid_str) - 1);
+    close(fd);
+
+    if (bytes > 0) {
+        pid_str[bytes] = '\0';
+        pid_t monitor_pid = atoi(pid_str);
+        if (kill(monitor_pid, SIGUSR1) == 0) {
+            log_action(dist, role, user, "ADD_REPORT - Monitor notified successfully");
+        } else {
+            log_action(dist, role, user, "ADD_REPORT - Monitor NOT notified (Signal failed)");
+        }
+    }
+}
+
 void add_report(const char *dist, const char *user, const char *role) {
     mkdir(dist, 0750); chmod(dist, 0750);
     char path[256]; sprintf(path, "%s/reports.dat", dist);
@@ -132,6 +156,7 @@ void add_report(const char *dist, const char *user, const char *role) {
 
     update_symlink(dist); // Requirement: Create/Update symlink
     log_action(dist, role, user, "ADD_REPORT");
+    notify_monitor(dist, role, user);
 }
 
 void list_reports(const char *dist, const char *role, const char *user) {
