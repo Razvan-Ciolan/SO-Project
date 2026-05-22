@@ -28,14 +28,15 @@ int main() {
         if (fscanf(f, "%d", &existing_pid) == 1) {
             if (kill(existing_pid, 0) == 0) {
                 char err_msg[128];
-                int len = sprintf(err_msg,"PID file already running with PID:%d.\n",existing_pid);
+                int len = sprintf(err_msg, "ERR: PID file already running with PID:%d.\n", existing_pid);
                 write(STDOUT_FILENO, err_msg, len);
                 fclose(f);
                 return 1;
             }
         }
+        fclose(f);
     }
-    fclose(f);
+
     int fd = open(PID_FILE, O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (fd < 0) {
         perror("Error creating PID file");
@@ -49,6 +50,7 @@ int main() {
         exit(EXIT_FAILURE);
     }
     close(fd);
+
     printf("Started with PID: %d. Listening for signals...\n", getpid());
 
     struct sigaction sa;
@@ -65,13 +67,16 @@ int main() {
         unlink(PID_FILE);
         exit(EXIT_FAILURE);
     }
+
     while (keep_running) {
         pause();
     }
+
     if (unlink(PID_FILE) == 0) {
         printf("Cleanup successful: %s deleted.\n", PID_FILE);
     } else {
         perror("Error deleting PID file");
     }
+
     return 0;
 }
