@@ -1,0 +1,10 @@
+city_manager
+city_hub
+monitor_reports
+scorer
+
+
+*.o
+reports.dat
+district.cfg
+.monitor_pid
